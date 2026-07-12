@@ -6,7 +6,9 @@ Multi-format (pptx/docx/xlsx) generator. Returns a Dify-compatible artifact
 contract (JSON metadata) so KPRX / Dify workflows consume it unchanged.
 
 Endpoints:
-    POST /generate/{fmt}/metadata   -> JSON artifact contract (Dify-compatible)
+    POST /generate/metadata         -> JSON artifact contract; format from body
+                                      artifact_type (static URL, Dify-safe)
+    POST /generate/{fmt}/metadata   -> JSON artifact contract (path-based)
     POST /generate/{fmt}            -> binary (legacy, direct HTTP testing)
     GET  /download/{fmt}/{fname}    -> serve stored artifact
     GET  /health                    -> {"status":"ok",...}
@@ -275,13 +277,72 @@ class Handler(BaseHTTPRequestHandler):
             return
         return self._json({"error": "not found"}, 404)
 
+    # ---- shared contract builder (path & static routes are byte-identical) ----
+    def _metadata_contract(self, body, fmt, raw):
+        """Store artifact and build the artifact contract dict.
+
+        Used by BOTH `/generate/{fmt}/metadata` and `/generate/metadata` so the
+        returned JSON is identical for the same (body, fmt) — same field order,
+        same values, same sha-derived ids.
+        """
+        sha = hashlib.sha256(raw).hexdigest()
+        fname = f"sandbox-{fmt}-{sha[:12]}.{fmt}"
+        fpath = os.path.join(OUTPUT_DIR, fname)
+        with open(fpath, "wb") as f:
+            f.write(raw)
+        title = body.get("title", "Untitled")
+        return {
+            "artifact": {
+                "provider": "external_tool",
+                "provider_file_id": sha[:12],
+                "download_url": f"{PUBLIC_BASE}/download/{fmt}/{fname}",
+                "filename": f"{title}.{fmt}",
+                "mime_type": MIME_MAP[fmt],
+                "artifact_type": fmt,
+                "size": len(raw),
+                "checksum": f"sha256:{sha}",
+            }
+        }
+
+    def _generate_raw(self, body, fmt):
+        """Resolve template + render -> raw bytes. Raises ValueError on bad input."""
+        tmpl_path, marker = resolve_template(body, fmt)
+        return GENERATORS[fmt](body, tmpl_path, marker)
+
+    # ---- POST /generate/metadata (static URL, format from body) ----
+    def _handle_static_metadata(self):
+        try:
+            body = self._read_json_body()
+        except Exception:
+            return self._json({"error": "invalid JSON body"}, 400)
+        fmt = body.get("artifact_type")
+        if not fmt:
+            return self._json({"error": "missing artifact_type"}, 400)
+        if fmt not in GENERATORS:
+            return self._json({"error": f"unknown artifact_type: {fmt}"}, 400)
+        try:
+            raw = self._generate_raw(body, fmt)
+        except ValueError as e:
+            return self._json({"error": str(e)}, 400)
+        except Exception as e:
+            return self._json({"error": f"generation failed: {e}"}, 500)
+        # identical contract builder as the path-based metadata route
+        return self._json(self._metadata_contract(body, fmt, raw))
+
     # ---- POST ----
     def do_POST(self):
         path = unquote(self.path)
         parts = [p for p in path.split("/") if p != ""]
-        # /generate/{fmt}[/metadata]
         if len(parts) < 2 or parts[0] != "generate":
             return self._json({"error": "not found"}, 404)
+
+        # Static body-format endpoint: POST /generate/metadata
+        # (format selected from body.artifact_type; URL has no variable segment,
+        #  works around Dify dropping static suffixes after path variables).
+        if parts == ["generate", "metadata"]:
+            return self._handle_static_metadata()
+
+        # Path-format routes: /generate/{fmt}[/metadata]
         is_metadata = len(parts) >= 3 and parts[-1] == "metadata"
         fmt = parts[-2] if is_metadata else parts[-1]
 
@@ -294,33 +355,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "invalid JSON body"}, 400)
 
         try:
-            tmpl_path, marker = resolve_template(body, fmt)
-            raw = GENERATORS[fmt](body, tmpl_path, marker)
+            raw = self._generate_raw(body, fmt)
         except ValueError as e:
             return self._json({"error": str(e)}, 400)
         except Exception as e:
             return self._json({"error": f"generation failed: {e}"}, 500)
 
         if is_metadata:
-            sha = hashlib.sha256(raw).hexdigest()
-            fname = f"sandbox-{fmt}-{sha[:12]}.{fmt}"
-            fpath = os.path.join(OUTPUT_DIR, fname)
-            with open(fpath, "wb") as f:
-                f.write(raw)
-            title = body.get("title", "Untitled")
-            contract = {
-                "artifact": {
-                    "provider": "external_tool",
-                    "provider_file_id": sha[:12],
-                    "download_url": f"{PUBLIC_BASE}/download/{fmt}/{fname}",
-                    "filename": f"{title}.{fmt}",
-                    "mime_type": MIME_MAP[fmt],
-                    "artifact_type": fmt,
-                    "size": len(raw),
-                    "checksum": f"sha256:{sha}",
-                }
-            }
-            return self._json(contract)
+            return self._json(self._metadata_contract(body, fmt, raw))
 
         # binary (legacy)
         self.send_response(200)

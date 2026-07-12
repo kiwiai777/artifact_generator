@@ -169,6 +169,66 @@ class HttpContractTests(unittest.TestCase):
         except urllib.error.HTTPError as e:
             self.assertIn(e.code, (403, 404))
 
+    # ---- POST /generate/metadata (static URL, format from body) ----
+    def test_static_metadata_all_formats(self):
+        for fmt in ("pptx", "docx", "xlsx"):
+            with self.subTest(fmt=fmt):
+                payload = dict(SAMPLE_CONTENT, artifact_type=fmt)
+                code, body = self._post("/generate/metadata", payload)
+                self.assertEqual(code, 200)
+                art = body["artifact"]
+                self.assertEqual(set(art), CONTRACT_FIELDS)
+                self.assertEqual(art["artifact_type"], fmt)
+                self.assertTrue(art["download_url"].endswith(f".{fmt}"))
+                self.assertTrue(art["checksum"].startswith("sha256:"))
+                # stored file is valid OOXML
+                fname = art["download_url"].rsplit("/", 1)[-1]
+                with open(os.path.join(ag.OUTPUT_DIR, fname), "rb") as f:
+                    raw = f.read()
+                self.assertTrue(_zip_ok(raw))
+                self.assertEqual(art["size"], len(raw))
+
+    def test_static_metadata_byte_identical_to_path_version(self):
+        """Same (body, fmt) via /generate/metadata and /generate/{fmt}/metadata
+        must produce byte-identical contract JSON."""
+        for fmt in ("pptx", "docx", "xlsx"):
+            with self.subTest(fmt=fmt):
+                payload = dict(SAMPLE_CONTENT, artifact_type=fmt)
+                _, static = self._post("/generate/metadata", payload)
+                # path version ignores body.artifact_type; pass fmt in URL
+                path_payload = dict(SAMPLE_CONTENT)  # no artifact_type key
+                _, via_path = self._post(f"/generate/{fmt}/metadata", path_payload)
+                self.assertEqual(static, via_path)
+                # also assert exact serialized-byte equality
+                self.assertEqual(
+                    json.dumps(static, sort_keys=True),
+                    json.dumps(via_path, sort_keys=True),
+                )
+
+    def test_static_metadata_missing_or_unknown_type_is_4xx(self):
+        # missing artifact_type
+        try:
+            self._post("/generate/metadata", {"title": "x"})
+            self.fail("expected 4xx for missing artifact_type")
+        except urllib.error.HTTPError as e:
+            self.assertGreaterEqual(e.code, 400)
+            self.assertLess(e.code, 500)
+        # unknown artifact_type
+        try:
+            self._post("/generate/metadata", {"title": "x", "artifact_type": "pdf"})
+            self.fail("expected 4xx for unknown artifact_type")
+        except urllib.error.HTTPError as e:
+            self.assertGreaterEqual(e.code, 400)
+            self.assertLess(e.code, 500)
+
+    def test_path_routes_regression(self):
+        """Existing /generate/{fmt}/metadata and /generate/{fmt} still work."""
+        for fmt in ("pptx", "docx", "xlsx"):
+            with self.subTest(fmt=fmt):
+                code, body = self._post(f"/generate/{fmt}/metadata", SAMPLE_CONTENT)
+                self.assertEqual(code, 200)
+                self.assertEqual(body["artifact"]["artifact_type"], fmt)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,0 +1,26 @@
+[Unit]
+Description=Artifact Generator (multi-format pptx/docx/xlsx)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kiwi
+Group=kiwi
+WorkingDirectory=/opt/kiwiai/apps/artifact_generator
+Environment=AG_OUTPUT_DIR=/opt/kiwiai/apps/artifact_generator/output
+Environment=AG_TEMPLATES_DIR=/opt/kiwiai/apps/artifact_generator/templates
+Environment=AG_BIND_HOST=172.17.0.1
+Environment=AG_PUBLIC_BASE=http://172.17.0.1:9191
+ExecStart=/opt/kiwiai/apps/artifact_generator/venv/bin/python /opt/kiwiai/apps/artifact_generator/app/server.py --host 172.17.0.1 --port 9191
+Restart=on-failure
+RestartSec=5
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/kiwiai/apps/artifact_generator/output
+
+[Install]
+WantedBy=multi-user.target

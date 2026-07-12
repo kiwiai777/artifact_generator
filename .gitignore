@@ -1,0 +1,5 @@
+task_cards/
+venv/
+__pycache__/
+*.pyc
+.env

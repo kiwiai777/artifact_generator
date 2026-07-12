@@ -64,6 +64,29 @@ MIME_MAP = {
 
 
 # ---------------------------------------------------------------------------
+# Tolerant body-string normalization
+# ---------------------------------------------------------------------------
+def _normalize(v):
+    """Tolerant normalization for body string values.
+
+    Dify JSON-body pills sometimes wrap a value in a literal pair of braces
+    (e.g. ``{docx}``) or pad it with whitespace. Strip leading/trailing
+    whitespace, then strip at most ONE matching outer ``{ ... }`` pair, then
+    strip again. Only parsing is affected; the contract structure is unchanged.
+
+      _normalize("{docx}")   -> "docx"
+      _normalize("  docx ")  -> "docx"
+      _normalize("docx")     -> "docx"
+      _normalize("{{x}}")    -> "{x}"   (one pair only; still rejected downstream)
+      _normalize("{}")       -> ""      (-> missing artifact_type)
+    """
+    s = str(v).strip()
+    if len(s) >= 2 and s.startswith("{") and s.endswith("}"):
+        s = s[1:-1].strip()
+    return s
+
+
+# ---------------------------------------------------------------------------
 # Template Mode Resolver (behavior preserved from POC)
 # ---------------------------------------------------------------------------
 def resolve_template(body: dict, fmt: str):
@@ -278,12 +301,14 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"error": "not found"}, 404)
 
     # ---- shared contract builder (path & static routes are byte-identical) ----
-    def _metadata_contract(self, body, fmt, raw):
+    def _metadata_contract(self, body, fmt, raw, normalize_title=False):
         """Store artifact and build the artifact contract dict.
 
         Used by BOTH `/generate/{fmt}/metadata` and `/generate/metadata` so the
         returned JSON is identical for the same (body, fmt) — same field order,
-        same values, same sha-derived ids.
+        same values, same sha-derived ids. When ``normalize_title`` is True
+        (static endpoint), the title is run through :func:`_normalize` so Dify's
+        brace-wrapped values don't produce dirty filenames like ``{docx}.docx``.
         """
         sha = hashlib.sha256(raw).hexdigest()
         fname = f"sandbox-{fmt}-{sha[:12]}.{fmt}"
@@ -291,6 +316,8 @@ class Handler(BaseHTTPRequestHandler):
         with open(fpath, "wb") as f:
             f.write(raw)
         title = body.get("title", "Untitled")
+        if normalize_title:
+            title = _normalize(title) or "Untitled"
         return {
             "artifact": {
                 "provider": "external_tool",
@@ -315,7 +342,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json_body()
         except Exception:
             return self._json({"error": "invalid JSON body"}, 400)
-        fmt = body.get("artifact_type")
+        fmt = _normalize(body.get("artifact_type", ""))
         if not fmt:
             return self._json({"error": "missing artifact_type"}, 400)
         if fmt not in GENERATORS:
@@ -327,7 +354,8 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._json({"error": f"generation failed: {e}"}, 500)
         # identical contract builder as the path-based metadata route
-        return self._json(self._metadata_contract(body, fmt, raw))
+        # (normalize_title=True so Dify brace values don't leak into filename)
+        return self._json(self._metadata_contract(body, fmt, raw, normalize_title=True))
 
     # ---- POST ----
     def do_POST(self):

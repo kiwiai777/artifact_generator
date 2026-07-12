@@ -229,6 +229,58 @@ class HttpContractTests(unittest.TestCase):
                 self.assertEqual(code, 200)
                 self.assertEqual(body["artifact"]["artifact_type"], fmt)
 
+    # ---- tolerant body-string normalization ----
+    def test_normalize_unit(self):
+        self.assertEqual(ag._normalize("{docx}"), "docx")
+        self.assertEqual(ag._normalize("  docx "), "docx")
+        self.assertEqual(ag._normalize("docx"), "docx")
+        self.assertEqual(ag._normalize("{{x}}"), "{x}")  # one pair only
+        self.assertEqual(ag._normalize("{}"), "")
+        self.assertEqual(ag._normalize(" { x } "), "x")
+
+    def test_static_metadata_braced_variants_all_formats(self):
+        """Dify wraps body values in literal braces -> must still resolve."""
+        for raw_type, expect in [
+            ("{pptx}", "pptx"),
+            ("{docx}", "docx"),
+            ("{xlsx}", "xlsx"),
+            ("pptx", "pptx"),
+            ("  docx ", "docx"),
+        ]:
+            with self.subTest(raw_type=raw_type):
+                payload = dict(SAMPLE_CONTENT, artifact_type=raw_type, title="{测试}")
+                code, body = self._post("/generate/metadata", payload)
+                self.assertEqual(code, 200)
+                art = body["artifact"]
+                self.assertEqual(art["artifact_type"], expect)
+                # title normalized -> filename has no braces
+                self.assertEqual(art["filename"], f"测试.{expect}")
+                self.assertTrue(art["download_url"].endswith(f".{expect}"))
+                self.assertTrue(art["checksum"].startswith("sha256:"))
+
+    def test_static_metadata_braced_rejected_is_4xx(self):
+        for bad in ["{}", "", "{pdf}", "{{docx}}"]:
+            with self.subTest(bad=bad):
+                try:
+                    self._post("/generate/metadata", {"title": "x", "artifact_type": bad})
+                    self.fail(f"expected 4xx for artifact_type={bad!r}")
+                except urllib.error.HTTPError as e:
+                    self.assertGreaterEqual(e.code, 400)
+                    self.assertLess(e.code, 500)
+
+    def test_static_metadata_braced_equals_bare(self):
+        """`{docx}` via /generate/metadata must match a bare docx request
+        in everything except filename (braced title vs bare title)."""
+        bare = dict(SAMPLE_CONTENT, artifact_type="docx", title="测试")
+        braced = dict(SAMPLE_CONTENT, artifact_type="{docx}", title="{测试}")
+        _, b1 = self._post("/generate/metadata", bare)
+        _, b2 = self._post("/generate/metadata", braced)
+        # raw bytes identical -> size & checksum identical; filename identical
+        self.assertEqual(b1["artifact"]["size"], b2["artifact"]["size"])
+        self.assertEqual(b1["artifact"]["checksum"], b2["artifact"]["checksum"])
+        self.assertEqual(b1["artifact"]["filename"], b2["artifact"]["filename"])
+        self.assertEqual(b2["artifact"]["artifact_type"], "docx")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

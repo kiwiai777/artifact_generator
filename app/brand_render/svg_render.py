@@ -53,6 +53,20 @@ def docker_image_present(image):
         return False
 
 
+def _cleanup_render(html_file, chrome_profile=None):
+    """Remove render scratch artifacts (HTML wrapper + chrome user-data-dir).
+
+    ``chrome_profile`` is None on the Docker branch, so this is a safe no-op for
+    extra cleanup there. Always best-effort (never masks the real render error).
+    """
+    try:
+        os.unlink(html_file)
+    except Exception:
+        pass
+    if chrome_profile:
+        shutil.rmtree(chrome_profile, ignore_errors=True)
+
+
 def svg_to_png(svg_content, out_path, width=1000, height=520):
     """Render an SVG (wrapped in a minimal HTML shell) to a PNG.
 
@@ -80,12 +94,32 @@ def svg_to_png(svg_content, out_path, width=1000, height=520):
     alpine_image = "zenika/alpine-chrome"
     docker_ready = docker_image_present(alpine_image)
 
+    # Local chrome on a hardened host (e.g. systemd ProtectHome makes /home
+    # read-only) dies with "mkdir '/home': Permission denied" because it tries
+    # to seed its profile under /home/<user>/.local. Point BOTH --user-data-dir
+    # and HOME at the render work dir (html_dir is guaranteed writable — we just
+    # wrote the HTML wrapper there) so chrome is fully self-contained and never
+    # touches /home, on any host. The Docker branch below is intentionally left
+    # untouched (its container has its own writable /workspace); the
+    # env-adaptive selection above is unchanged (LESSONS §F1-f — never hardcode
+    # a single render path, keep probing).
+    env = None
+    chrome_profile = None
     if local_chrome:
+        chrome_profile = os.path.join(html_dir, ".chrome-profile")
+        try:
+            os.makedirs(chrome_profile, exist_ok=True)
+        except Exception:
+            pass
         cmd = [
             local_chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars",
+            "--no-first-run", "--no-default-browser-check",
+            "--user-data-dir=%s" % chrome_profile,
             "--window-size=%d,%d" % (width, height),
             "--screenshot=%s" % abs_png, "file://%s" % abs_html,
         ]
+        env = dict(os.environ)
+        env["HOME"] = html_dir
     elif docker_ready:
         try:
             os.chmod(html_dir, 0o777)
@@ -99,10 +133,7 @@ def svg_to_png(svg_content, out_path, width=1000, height=520):
             "file:///workspace/%s" % html_name,
         ]
     else:
-        try:
-            os.unlink(html_file)
-        except Exception:
-            pass
+        _cleanup_render(html_file, chrome_profile)
         raise RuntimeError(
             "SVG render BLOCK: no local chrome/chromium binary found and Docker "
             "image '%s' not present locally. Environment probe: "
@@ -115,40 +146,27 @@ def svg_to_png(svg_content, out_path, width=1000, height=520):
         )
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=60, text=True)
-        try:
-            os.unlink(html_file)
-        except Exception:
-            pass
-        if not os.path.exists(out_path):
-            raise RuntimeError(
-                "SVG render failed: no output. Cmd: %s\nstdout: %s\nstderr: %s\nrc: %s"
-                % (" ".join(cmd), result.stdout, result.stderr, result.returncode)
-            )
-        if os.path.getsize(out_path) < 100:
-            raise RuntimeError(
-                "SVG render failed: file too small (%d bytes)"
-                % os.path.getsize(out_path)
-            )
-        return True
+        result = subprocess.run(
+            cmd, capture_output=True, timeout=60, text=True, env=env)
     except subprocess.TimeoutExpired:
-        try:
-            os.unlink(html_file)
-        except Exception:
-            pass
+        _cleanup_render(html_file, chrome_profile)
         raise RuntimeError("SVG render timeout (60s). Cmd: %s" % " ".join(cmd))
-    except RuntimeError:
-        try:
-            os.unlink(html_file)
-        except Exception:
-            pass
-        raise
     except Exception as e:
-        try:
-            os.unlink(html_file)
-        except Exception:
-            pass
+        _cleanup_render(html_file, chrome_profile)
         raise RuntimeError("SVG render error: %s" % e)
+
+    _cleanup_render(html_file, chrome_profile)
+    if not os.path.exists(out_path):
+        raise RuntimeError(
+            "SVG render failed: no output. Cmd: %s\nstdout: %s\nstderr: %s\nrc: %s"
+            % (" ".join(cmd), result.stdout, result.stderr, result.returncode)
+        )
+    if os.path.getsize(out_path) < 100:
+        raise RuntimeError(
+            "SVG render failed: file too small (%d bytes)"
+            % os.path.getsize(out_path)
+        )
+    return True
 
 
 # ---------------------------------------------------------------------------

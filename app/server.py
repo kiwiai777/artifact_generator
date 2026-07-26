@@ -56,6 +56,11 @@ TEMPLATES = {
 ALLOWED_TEMPLATE_DIRS = [TEMPLATES_DIR, tempfile.gettempdir()]
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Customer brand-assets root (multi-tenant: each tenant lives under
+# <BRAND_ASSETS_DIR>/<tenant>/deck-brand/<logo>). Used ONLY by the brand render
+# path; no tenant/customer literal is hard-coded here (redline).
+BRAND_ASSETS_DIR = os.environ.get("AG_BRAND_DIR", "/opt/kiwiai/customer-assets")
+
 MIME_MAP = {
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -121,6 +126,43 @@ def resolve_template(body: dict, fmt: str):
 # ---------------------------------------------------------------------------
 # Generators (logic preserved from POC)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Brand renderers (IR-adaptive): pptx/docx from a deck IR (brand_tokens + slides).
+# Import is tolerant so the server runs both as a package (tests) and as a direct
+# script (systemd ExecStart: python app/server.py).
+# ---------------------------------------------------------------------------
+try:
+    from .brand_render import render_pptx_from_ir, render_docx_from_ir
+except ImportError:  # direct script run
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    from brand_render import render_pptx_from_ir, render_docx_from_ir
+
+
+def _is_brand_ir(content):
+    """A body is a deck IR (brand path) iff it has brand_tokens + a slides[] list.
+    Everything else (legacy {sections[]} / {table_data}) keeps the synthetic path."""
+    return (
+        isinstance(content, dict)
+        and bool(content.get("brand_tokens"))
+        and isinstance(content.get("slides"), list)
+    )
+
+
+def _resolve_brand_dir(content):
+    """Resolve the customer deck-brand dir (where logo.png lives) from the body.
+    Multi-tenant, no hard-coded slug: body.brand_dir >
+    <BRAND_ASSETS_DIR>/<tenant>/deck-brand. Returns None when nothing usable is
+    supplied (brand render then proceeds with no logo)."""
+    explicit = content.get("brand_dir")
+    if explicit:
+        return explicit
+    tenant = content.get("tenant")
+    if tenant and BRAND_ASSETS_DIR:
+        return os.path.join(BRAND_ASSETS_DIR, str(tenant), "deck-brand")
+    return None
+
+
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
@@ -128,6 +170,13 @@ from pptx.dml.color import RGBColor
 
 
 def generate_pptx(content, template_path, marker):
+    # IR-adaptive: a deck IR (brand_tokens + slides) -> branded pptx; else legacy.
+    if _is_brand_ir(content):
+        return render_pptx_from_ir(
+            content,
+            brand_dir=_resolve_brand_dir(content),
+            logo_path=content.get("logo_path"),
+        )
     prs = Presentation(template_path) if template_path else Presentation()
     sections = content.get(
         "sections", [{"heading": content.get("title", "Untitled"), "body": "", "bullets": []}]
@@ -195,6 +244,13 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
 def generate_docx(content, template_path, marker):
+    # IR-adaptive: a deck IR (brand_tokens + slides) -> branded docx; else legacy.
+    if _is_brand_ir(content):
+        return render_docx_from_ir(
+            content,
+            brand_dir=_resolve_brand_dir(content),
+            work_dir=content.get("work_dir"),
+        )
     doc = Document(template_path) if template_path else Document()
     marker_para = doc.add_paragraph(marker)
     marker_para.alignment = WD_ALIGN_PARAGRAPH.CENTER

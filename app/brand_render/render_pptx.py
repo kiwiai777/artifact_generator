@@ -15,6 +15,7 @@ from pptx.chart.data import CategoryChartData
 
 SLIDE_W = Inches(13.333)
 SLIDE_H = Inches(7.5)
+SLIDE_H_IN = 7.5  # canvas height in inches (for stack vertical-centering math)
 FONT_HEADING = 'Microsoft YaHei'
 FONT_BODY = 'Microsoft YaHei'
 
@@ -137,26 +138,39 @@ def _render_to_prs(ir, logo_path=None, brand_dir=None, deck_html=None, work_dir=
         if stype == 'cover':
             bg_color = brand['cover'].get('bg_color', '#F2F3F5')
             fill.fore_color.rgb = hex_to_rgb(bg_color)
+            # Vertically center the cover stack (logo -> company_cn -> company_en ->
+            # divider -> title -> subtitle) on the 7.5" canvas, replicating the golden
+            # HTML deck `.slide-cover .slide-inner{justify-content:center}`. Each
+            # element sits at `cover_y0 + <offset>`; offsets preserve the original
+            # golden spacing, cover_y0 centers the stack (midpoint at SLIDE_H_IN/2).
+            # Footer stays pinned at the bottom (unchanged). [KIWIAGENCY-DECK-PPTX-COVER-CENTER-0]
+            cover_off_logo, cover_off_company_cn, cover_off_company_en = 0.0, 1.1, 1.45
+            cover_off_divider, cover_off_title, cover_off_subtitle = 1.85, 2.1, 3.2
+            cover_subtitle_h = 0.5
+            cover_stack_half = (cover_off_subtitle + cover_subtitle_h - cover_off_logo) / 2  # 1.85
+            cover_y0 = SLIDE_H_IN / 2 - cover_stack_half                              # 1.9
             if logo_path and os.path.exists(logo_path):
                 logo_left = (13.333 - 1.5) / 2
-                slide.shapes.add_picture(logo_path, Inches(logo_left), Inches(1.0), Inches(1.5), Inches(0.9))
+                slide.shapes.add_picture(logo_path, Inches(logo_left),
+                                         Inches(cover_y0 + cover_off_logo), Inches(1.5), Inches(0.9))
             company_cn = ir['cover_reference']['company_name_cn']
-            add_text_box(slide, 1.5, 2.1, 10.333, 0.4, company_cn, font_size=15,
-                         bold=True, color='#1A1A2E', font_name=FONT_HEADING, alignment=PP_ALIGN.CENTER)
+            add_text_box(slide, 1.5, cover_y0 + cover_off_company_cn, 10.333, 0.4, company_cn,
+                         font_size=15, bold=True, color='#1A1A2E', font_name=FONT_HEADING, alignment=PP_ALIGN.CENTER)
             company_en = ir['cover_reference']['company_name_en']
-            add_text_box(slide, 1.5, 2.45, 10.333, 0.3, company_en, font_size=11,
-                         color='#666', font_name=FONT_BODY, alignment=PP_ALIGN.CENTER)
-            div = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(6.416), Inches(2.85), Inches(0.5), Inches(0.03))
+            add_text_box(slide, 1.5, cover_y0 + cover_off_company_en, 10.333, 0.3, company_en,
+                         font_size=11, color='#666', font_name=FONT_BODY, alignment=PP_ALIGN.CENTER)
+            div = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(6.416),
+                                         Inches(cover_y0 + cover_off_divider), Inches(0.5), Inches(0.03))
             div.fill.solid()
             div.fill.fore_color.rgb = hex_to_rgb(primary)
             div.line.fill.background()
             title = slide_data.get('title', '')
-            add_text_box(slide, 1.0, 3.1, 11.333, 1.2, title, font_size=34,
-                         bold=True, color=primary, font_name=FONT_HEADING, alignment=PP_ALIGN.CENTER)
+            add_text_box(slide, 1.0, cover_y0 + cover_off_title, 11.333, 1.2, title,
+                         font_size=34, bold=True, color=primary, font_name=FONT_HEADING, alignment=PP_ALIGN.CENTER)
             subtitle = slide_data.get('subtitle', '')
             if subtitle:
-                add_text_box(slide, 2.0, 4.2, 9.333, 0.5, subtitle, font_size=14,
-                             color='#666', font_name=FONT_BODY, alignment=PP_ALIGN.CENTER)
+                add_text_box(slide, 2.0, cover_y0 + cover_off_subtitle, 9.333, cover_subtitle_h, subtitle,
+                             font_size=14, color='#666', font_name=FONT_BODY, alignment=PP_ALIGN.CENTER)
             footer_text = company_short_name + ' · 2026'
             add_text_box(slide, 0, 6.9, 13.333, 0.3, footer_text, font_size=10,
                          color='#999', font_name=FONT_BODY, alignment=PP_ALIGN.CENTER)
@@ -167,44 +181,58 @@ def _render_to_prs(ir, logo_path=None, brand_dir=None, deck_html=None, work_dir=
             bg_color = brand['cover'].get('bg_color', '#F2F3F5')
             fill.fore_color.rgb = hex_to_rgb(bg_color)
             slide_w_in = 13.333
+            # Vertically center the end stack (logo -> company_cn -> company_en ->
+            # divider -> title -> subtitle) on the 7.5" canvas, same as cover (golden
+            # `.slide-end .slide-inner{justify-content:center}`). Contact info is pinned
+            # to the lower part (贴下部), bottom-anchored at the cover-footer baseline so
+            # the block sits cleanly under the centered stack with no overlap (mirrors
+            # the cover footer's bottom pin). [KIWIAGENCY-DECK-PPTX-COVER-CENTER-0]
+            end_off_logo, end_off_company_cn, end_off_company_en = 0.0, 1.1, 1.45
+            end_off_divider, end_off_title, end_off_subtitle = 1.85, 2.1, 3.0
+            end_subtitle_h = 0.5
+            end_stack_half = (end_off_subtitle + end_subtitle_h - end_off_logo) / 2  # 1.75
+            end_y0 = SLIDE_H_IN / 2 - end_stack_half                                # 2.0
             # Logo centered at top
             if logo_path and os.path.exists(logo_path):
                 logo_w, logo_h = 1.5, 0.9
-                slide.shapes.add_picture(logo_path, Inches((slide_w_in - logo_w) / 2), Inches(1.0),
-                                         Inches(logo_w), Inches(logo_h))
+                slide.shapes.add_picture(logo_path, Inches((slide_w_in - logo_w) / 2),
+                                         Inches(end_y0 + end_off_logo), Inches(logo_w), Inches(logo_h))
             # Company name CN (brand color, centered)
-            add_text_box(slide, 1.5, 2.1, 10.333, 0.4, company_cn_full, font_size=15,
-                         bold=True, color=primary, font_name=FONT_HEADING, alignment=PP_ALIGN.CENTER)
+            add_text_box(slide, 1.5, end_y0 + end_off_company_cn, 10.333, 0.4, company_cn_full,
+                         font_size=15, bold=True, color=primary, font_name=FONT_HEADING, alignment=PP_ALIGN.CENTER)
             # Company name EN (centered)
             company_en = ir['cover_reference']['company_name_en']
-            add_text_box(slide, 1.5, 2.45, 10.333, 0.3, company_en, font_size=11,
-                         color='#666', font_name=FONT_BODY, alignment=PP_ALIGN.CENTER)
+            add_text_box(slide, 1.5, end_y0 + end_off_company_en, 10.333, 0.3, company_en,
+                         font_size=11, color='#666', font_name=FONT_BODY, alignment=PP_ALIGN.CENTER)
             # Divider
-            div = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(6.416), Inches(2.85), Inches(0.5), Inches(0.03))
+            div = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(6.416),
+                                         Inches(end_y0 + end_off_divider), Inches(0.5), Inches(0.03))
             div.fill.solid()
             div.fill.fore_color.rgb = hex_to_rgb(primary)
             div.line.fill.background()
             # Main title (感谢聆听)
             title = slide_data.get('title', '感谢聆听')
-            add_text_box(slide, 1.0, 3.1, 11.333, 1.0, title, font_size=34,
+            add_text_box(slide, 1.0, end_y0 + end_off_title, 11.333, 1.0, title, font_size=34,
                          bold=True, color=primary, font_name=FONT_HEADING, alignment=PP_ALIGN.CENTER)
             # Subtitle (方案标题)
             subtitle = slide_data.get('subtitle', '')
             if subtitle:
-                add_text_box(slide, 2.0, 4.0, 9.333, 0.5, subtitle, font_size=16,
-                             color='#666', font_name=FONT_HEADING, alignment=PP_ALIGN.CENTER)
-            # Contact info centered at bottom
+                add_text_box(slide, 2.0, end_y0 + end_off_subtitle, 9.333, end_subtitle_h, subtitle,
+                             font_size=16, color='#666', font_name=FONT_HEADING, alignment=PP_ALIGN.CENTER)
+            # Contact info centered, pinned to the lower part (贴下部): bottom-anchored at
+            # the cover-footer baseline (6.9+0.3=7.2) so the last line aligns with the
+            # footer and the block clears the centered stack (no overlap). line_step keeps
+            # the P2-4 >=0.15" inter-line gap.
             contact = slide_data.get('contact', '')
             if contact:
                 parts = contact.split('|')
-                y = 4.8
-                # P2-4: box height 0.35" but the old 0.3" y-increment left only a
-                # 0.05" gap (line N+1 top at old_y+0.3 vs line N bottom at old_y+0.35
-                # -> -0.05" overlap). Bump the gap to >=0.15" so lines never overlap.
-                line_step = 0.35 + 0.15
+                line_h = 0.35
+                line_step = 0.35 + 0.15  # 0.5 (P2-4: >=0.15" gap between lines)
+                contact_baseline = 7.2   # last line bottom == cover footer bottom (贴下部)
+                y = contact_baseline - line_h - (len(parts) - 1) * line_step
                 for part in parts:
                     part = part.strip()
-                    add_text_box(slide, 3.0, y, 7.333, 0.35, part, font_size=12,
+                    add_text_box(slide, 3.0, y, 7.333, line_h, part, font_size=12,
                                  color='#999', font_name=FONT_BODY, alignment=PP_ALIGN.CENTER)
                     y += line_step
         

@@ -494,6 +494,49 @@ def _render_to_doc(ir, brand_dir=None, work_dir=None):
                     if cell.paragraphs and cell.paragraphs[0].text == '' and len(cell.paragraphs) > 1:
                         p_elem = cell.paragraphs[0]._p
                         p_elem.getparent().remove(p_elem)
+            
+            # ── Table (generic data table) ──
+            elif 'table' in slide_data:
+                tbl_ir = slide_data['table']
+                headers = tbl_ir.get('headers', [])
+                rows = tbl_ir.get('rows', [])
+                if headers and rows:
+                    n_cols = len(headers)
+                    tbl = doc.add_table(rows=len(rows) + 1, cols=n_cols)
+                    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+                    tbl.style = 'Table Grid'
+                    # Header row: brand primary bg + white bold text
+                    for ci, hdr in enumerate(headers):
+                        cell = tbl.cell(0, ci)
+                        set_cell_shading(cell, primary.lstrip('#'))
+                        p_h = cell.add_paragraph()
+                        run_h = p_h.add_run(hdr)
+                        run_h.font.size = Pt(11)
+                        run_h.font.bold = True
+                        run_h.font.name = FONT_HEADING
+                        run_h.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                        p_h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        # Remove default empty paragraph
+                        if cell.paragraphs and len(cell.paragraphs) > 1 and cell.paragraphs[0].text == '':
+                            p_elem = cell.paragraphs[0]._p
+                            p_elem.getparent().remove(p_elem)
+                    # Data rows: body font, alternating row shading
+                    for ri, row_data in enumerate(rows):
+                        for ci, val in enumerate(row_data):
+                            if ci >= n_cols:
+                                break
+                            cell = tbl.cell(ri + 1, ci)
+                            if ri % 2 == 0:
+                                set_cell_shading(cell, 'F8FAFB')
+                            p_d = cell.add_paragraph()
+                            run_d = p_d.add_run(str(val))
+                            run_d.font.size = Pt(10)
+                            run_d.font.name = FONT_BODY
+                            run_d.font.color.rgb = hex_to_rgb('#333333')
+                            # Remove default empty paragraph
+                            if cell.paragraphs and len(cell.paragraphs) > 1 and cell.paragraphs[0].text == '':
+                                p_elem = cell.paragraphs[0]._p
+                                p_elem.getparent().remove(p_elem)
         
         # ═══════════════════ DIAGRAM ═══════════════════
         elif stype == 'diagram':

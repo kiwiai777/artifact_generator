@@ -361,6 +361,64 @@ def _render_to_prs(ir, logo_path=None, brand_dir=None, deck_html=None, work_dir=
                     desc = item.get('description', '')
                     add_text_box(slide, cx, line_y + 0.9, step_w, 1.5, desc,
                                  font_size=10, color='#666', font_name=FONT_BODY, alignment=PP_ALIGN.CENTER)
+            
+            elif 'table' in slide_data:
+                tbl_ir = slide_data['table']
+                headers = tbl_ir.get('headers', [])
+                rows = tbl_ir.get('rows', [])
+                if headers and rows:
+                    n_cols = len(headers)
+                    n_rows = len(rows) + 1  # +1 for header row
+                    # Native pptx table, sized to fit the content area
+                    tbl_left, tbl_top = 0.8, 1.2
+                    tbl_w = 11.733  # ~13.333 - 2*0.8 margins
+                    row_h = 0.4
+                    tbl_h = n_rows * row_h
+                    tbl_shape = slide.shapes.add_table(n_rows, n_cols, Inches(tbl_left), Inches(tbl_top), Inches(tbl_w), Inches(tbl_h))
+                    table = tbl_shape.table
+                    # Column width: evenly distributed
+                    col_w = int(Inches(tbl_w) / n_cols)
+                    for ci in range(n_cols):
+                        table.columns[ci].width = col_w
+                    # Header row: brand primary bg + white bold text
+                    # python-pptx table.cell(row, col)
+                    for ci, hdr in enumerate(headers):
+                        cell = table.cell(0, ci)
+                        # Set cell fill to primary color
+                        cell_fill = cell.fill
+                        cell_fill.solid()
+                        cell_fill.fore_color.rgb = hex_to_rgb(primary)
+                        # Set text
+                        tf = cell.text_frame
+                        tf.word_wrap = True
+                        p = tf.paragraphs[0]
+                        p.text = hdr
+                        p.font.size = Pt(11)
+                        p.font.bold = True
+                        p.font.name = FONT_HEADING
+                        p.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                        p.alignment = PP_ALIGN.CENTER
+                        cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+                    # Data rows: body font, alternating row shading
+                    for ri, row_data in enumerate(rows):
+                        for ci, val in enumerate(row_data):
+                            if ci >= n_cols:
+                                break
+                            cell = table.cell(ri + 1, ci)
+                            cell_fill = cell.fill
+                            cell_fill.solid()
+                            if ri % 2 == 0:
+                                cell_fill.fore_color.rgb = hex_to_rgb('F8FAFB')
+                            else:
+                                cell_fill.fore_color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                            tf = cell.text_frame
+                            tf.word_wrap = True
+                            p = tf.paragraphs[0]
+                            p.text = str(val)
+                            p.font.size = Pt(10)
+                            p.font.name = FONT_BODY
+                            p.font.color.rgb = hex_to_rgb('#333333')
+                            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
         
         elif stype == 'diagram':
             fill.fore_color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
